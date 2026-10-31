@@ -1,5 +1,9 @@
 import os
 from typing import List
+
+# Disable AWS IMDS metadata service probe
+os.environ["AWS_EC2_METADATA_DISABLED"] = "true"
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +31,14 @@ class Settings(BaseSettings):
         "apex_racing.db",
     )
 
+    # Security & Authentication
+    ADMIN_API_KEY: str = "apex-admin-secret"
+    JWT_SECRET_KEY: str = "apex-racing-secret-key-change-in-production"
+    REQUIRE_AUTH_FOR_CAREER_SYNC: bool = False  # Set True in production to strictly enforce player tokens
+
+    # Anti-Spam / Rate Limiting
+    RATE_LIMIT_ENABLED: bool = True
+
     # Cloudflare R2 / S3 Storage (Optional: used for game music, 3D glTF models, ghost replays)
     R2_ACCOUNT_ID: str = ""
     R2_ACCESS_KEY_ID: str = ""
@@ -43,4 +55,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

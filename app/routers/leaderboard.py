@@ -1,13 +1,14 @@
 import json
 import time
 import uuid
-from typing import List, Optional
+from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
 import aiosqlite
 
 from ..database import get_db
-from ..models import LeaderboardSubmission, LeaderboardEntryResponse
-from ..services.anti_cheat import validate_lap_time
+from ..schemas.leaderboard import LeaderboardSubmission, LeaderboardEntryResponse
+from ..services.anti_cheat import validate_lap_time, validate_ghost_telemetry
+from ..core.rate_limit import rate_limit_submissions
 
 router = APIRouter(prefix="/api/leaderboard", tags=["Leaderboards"])
 
@@ -61,22 +62,29 @@ async def get_leaderboard(
     return results
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(rate_limit_submissions)])
 async def submit_lap_record(
     sub: LeaderboardSubmission,
     db: aiosqlite.Connection = Depends(get_db),
 ):
     """
-    Submit a completed race / qualifying lap time. Validates against anti-cheat thresholds.
+    Submit a completed race / qualifying lap time. Validates against anti-cheat physics & ghost thresholds.
     """
-    # 1. Anti-cheat validation
+    # 1. Physical lap time validation
     if not validate_lap_time(sub.trackName, sub.timeTicks, sub.sectors):
         raise HTTPException(
             status_code=400,
             detail="Lap time failed physics validation check.",
         )
 
-    # 2. Check compound code
+    # 2. Ghost telemetry integrity validation
+    if sub.ghostData and not validate_ghost_telemetry(sub.ghostData, sub.timeTicks):
+        raise HTTPException(
+            status_code=400,
+            detail="Ghost telemetry failed anti-cheat verification (speed threshold or teleportation detected).",
+        )
+
+    # 3. Check compound code
     compound_code = "M"
     if isinstance(sub.compound, int):
         compound_map = {0: "S", 1: "M", 2: "H", 3: "W"}
@@ -84,7 +92,7 @@ async def submit_lap_record(
     elif isinstance(sub.compound, str):
         compound_code = sub.compound.upper()[:1]
 
-    # 3. Insert record
+    # 4. Insert record
     record_id = f"rec_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
     sectors_str = json.dumps(sub.sectors) if sub.sectors else None
     ghost_str = json.dumps(sub.ghostData) if sub.ghostData else None
@@ -145,4 +153,3 @@ async def get_ghost_telemetry(
         "time": row["time_formatted"],
         "telemetry": json.loads(row["ghost_data_json"]),
     }
-

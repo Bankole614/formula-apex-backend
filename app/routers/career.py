@@ -1,11 +1,24 @@
 import json
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 import aiosqlite
 
 from ..database import get_db
-from ..models import CareerSyncRequest, CareerProfileResponse
+from ..schemas.career import CareerSyncRequest, CareerProfileResponse
+from ..config import settings
+from ..core.security import create_player_token, verify_player_token
 
 router = APIRouter(prefix="/api/career", tags=["Career Cloud Sync"])
+
+
+@router.post("/token")
+async def generate_player_token(user_id: str, driver_name: str):
+    """
+    Issue a signed JWT authentication token for a player's cloud profile.
+    """
+    if len(user_id) < 3:
+        raise HTTPException(status_code=400, detail="Invalid user_id.")
+    token = create_player_token(user_id.strip(), driver_name.strip())
+    return {"token": token, "userId": user_id, "tokenType": "Bearer"}
 
 
 @router.get("/{user_id}", response_model=CareerProfileResponse)
@@ -53,7 +66,28 @@ async def sync_career_profile(
 ):
     """
     Save and sync Career driver level, XP, R&D upgrades, and points.
+    Validates token if provided or if REQUIRE_AUTH_FOR_CAREER_SYNC is enabled.
     """
+    if user_id.strip() != req.userId.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Path parameter userId does not match request body userId.",
+        )
+
+    # Security check: if token provided or strictly required in production
+    if req.authToken or settings.REQUIRE_AUTH_FOR_CAREER_SYNC:
+        if not req.authToken:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication token required to sync cloud profile.",
+            )
+        payload = verify_player_token(req.authToken)
+        if not payload or payload.get("sub") != user_id.strip():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Invalid or expired player auth token.",
+            )
+
     upgrades_str = json.dumps(req.upgrades)
     stats_str = json.dumps(req.stats)
 
@@ -92,4 +126,3 @@ async def sync_career_profile(
         "userId": user_id,
         "message": "Career cloud state synced successfully.",
     }
-

@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 import aiosqlite
 
 from ..database import get_db
-from ..models import CommunityTrackSubmission, CommunityTrackResponse
+from ..schemas.tracks import CommunityTrackSubmission, CommunityTrackResponse
+from ..core.rate_limit import rate_limit_submissions, rate_limit_reactions
 
 router = APIRouter(prefix="/api/community-tracks", tags=["Community Circuits"])
 
@@ -57,7 +58,7 @@ async def list_community_tracks(
     return tracks
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(rate_limit_submissions)])
 async def publish_community_track(
     sub: CommunityTrackSubmission,
     db: aiosqlite.Connection = Depends(get_db),
@@ -106,7 +107,7 @@ async def publish_community_track(
     }
 
 
-@router.post("/{track_id}/like")
+@router.post("/{track_id}/like", dependencies=[Depends(rate_limit_reactions)])
 async def like_community_track(
     track_id: str,
     db: aiosqlite.Connection = Depends(get_db),
@@ -124,4 +125,3 @@ async def like_community_track(
     await db.commit()
 
     return {"success": True, "trackId": track_id, "likes": new_likes}
-

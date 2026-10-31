@@ -6,8 +6,9 @@ import aiosqlite
 
 from ..config import settings
 from ..database import get_db
-from ..models import MusicTrackItem, PresignedUploadRequest, PresignedUploadResponse
+from ..schemas.music import MusicTrackItem, PresignedUploadRequest, PresignedUploadResponse
 from ..services.r2_storage import r2_service
+from ..core.security import verify_admin_key
 
 router = APIRouter(prefix="/api/music", tags=["Music & Cloudflare R2 Streaming"])
 
@@ -82,10 +83,14 @@ async def stream_track(track_id: str, request: Request, db: aiosqlite.Connection
     return StreamingResponse(iter_stream(), status_code=status_code, headers=headers)
 
 
-@router.post("/presigned-upload", response_model=PresignedUploadResponse)
+@router.post(
+    "/presigned-upload",
+    response_model=PresignedUploadResponse,
+    dependencies=[Depends(verify_admin_key)],
+)
 async def get_presigned_upload_url(req: PresignedUploadRequest):
     """
-    Generate a direct presigned upload URL to Cloudflare R2.
+    Generate a direct presigned upload URL to Cloudflare R2 (Requires Admin Key).
     Allows uploading new songs directly to Cloudflare without routing heavy binary files through the FastAPI server.
     """
     clean_name = req.filename.replace(" ", "_")
@@ -110,7 +115,10 @@ async def get_presigned_upload_url(req: PresignedUploadRequest):
     )
 
 
-@router.post("/register")
+@router.post(
+    "/register",
+    dependencies=[Depends(verify_admin_key)],
+)
 async def register_music_track(
     title: str,
     artist: str,
@@ -120,7 +128,7 @@ async def register_music_track(
     db: aiosqlite.Connection = Depends(get_db),
 ):
     """
-    Register a newly uploaded R2 audio track into the active in-game radio playlist.
+    Register a newly uploaded R2 audio track into the active in-game radio playlist (Requires Admin Key).
     """
     track_id = f"track_{uuid.uuid4().hex[:8]}"
     await db.execute(
@@ -132,4 +140,3 @@ async def register_music_track(
     )
     await db.commit()
     return {"success": True, "trackId": track_id, "title": title, "streamUrl": streamUrl}
-

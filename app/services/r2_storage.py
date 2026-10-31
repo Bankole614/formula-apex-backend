@@ -1,5 +1,10 @@
+import os
 import logging
 from typing import Optional
+
+# Disable AWS IMDS metadata service probe to prevent hanging in non-AWS/local/offline environments
+os.environ["AWS_EC2_METADATA_DISABLED"] = "true"
+
 import boto3
 from botocore.config import Config
 from ..config import settings
@@ -23,7 +28,12 @@ class CloudflareR2Service:
                     endpoint_url=endpoint_url,
                     aws_access_key_id=settings.R2_ACCESS_KEY_ID,
                     aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
-                    config=Config(signature_version="s3v4"),
+                    config=Config(
+                        signature_version="s3v4",
+                        connect_timeout=3,
+                        read_timeout=5,
+                        retries={"max_attempts": 1},
+                    ),
                     region_name="auto",
                 )
                 logger.info("Cloudflare R2 client successfully initialized.")
@@ -81,4 +91,3 @@ class CloudflareR2Service:
 
 
 r2_service = CloudflareR2Service()
-
