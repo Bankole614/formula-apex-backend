@@ -1,0 +1,26 @@
+# Python environment
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Secrets & Environment variables
+.env
+.env.local
+
+# SQLite Local Database (WAL / Journal)
+data/*.db-shm
+data/*.db-wal
+data/*.db-journal
+
+# Temporary audio files
+optimized_music/
+raw_music/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
