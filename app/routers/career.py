@@ -102,7 +102,11 @@ async def sync_career_profile(
             driver_name = excluded.driver_name,
             team_id = excluded.team_id,
             level = MAX(career_profiles.level, excluded.level),
-            xp = MAX(career_profiles.xp, excluded.xp),
+            xp = CASE
+                WHEN excluded.level > career_profiles.level THEN excluded.xp
+                WHEN excluded.level = career_profiles.level THEN MAX(career_profiles.xp, excluded.xp)
+                ELSE career_profiles.xp
+            END,
             rd_points = excluded.rd_points,
             upgrades_json = excluded.upgrades_json,
             stats_json = excluded.stats_json,
