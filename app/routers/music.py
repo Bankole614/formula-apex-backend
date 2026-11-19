@@ -1,3 +1,6 @@
+import os
+import re
+import time
 import uuid
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -12,13 +15,89 @@ from ..core.security import verify_admin_key
 
 router = APIRouter(prefix="/api/music", tags=["Music & Cloudflare R2 Streaming"])
 
+AUDIO_EXTS = {".mp3", ".m4a", ".ogg", ".wav"}
+R2_SYNC_TTL_SECONDS = 300  # Re-scan R2 music/ bucket at most once every 5 minutes
+_last_r2_sync_at: float = 0.0
+
+
+def _parse_track_from_r2_key(key: str) -> tuple[str, str, str]:
+    """Derive deterministic (track_id, artist, title) from an R2 key like 'music/Asake-Forgiveness.mp3'."""
+    filename = os.path.basename(key)
+    stem, _ = os.path.splitext(filename)
+    slug = re.sub(r"[^a-z0-9]+", "_", stem.lower()).strip("_")
+    track_id = f"track_{slug}" if slug else f"track_{uuid.uuid4().hex[:8]}"
+
+    # Split on first '-' or ' - ' to separate artist & title
+    if " - " in stem:
+        artist_raw, title_raw = stem.split(" - ", 1)
+    elif "-" in stem:
+        artist_raw, title_raw = stem.split("-", 1)
+    else:
+        artist_raw, title_raw = "Apex Radio", stem
+
+    artist = artist_raw.replace("_", " ").replace("-", " ").strip() or "Apex Radio"
+    title = title_raw.replace("_", " ").replace("-", " ").strip() or stem
+    return track_id, artist, title
+
+
+async def sync_r2_music_tracks(db: aiosqlite.Connection, force: bool = False) -> int:
+    """
+    Discover all audio tracks stored in Cloudflare R2 under 'music/' and insert any
+    unregistered tracks into SQLite so GET /api/music/playlist serves the full bucket.
+    """
+    global _last_r2_sync_at
+    if not r2_service.is_configured():
+        return 0
+    now = time.monotonic()
+    if not force and (now - _last_r2_sync_at) < R2_SYNC_TTL_SECONDS:
+        return 0
+
+    keys = r2_service.list_objects(prefix="music/")
+    _last_r2_sync_at = now
+    if not keys:
+        return 0
+
+    cursor = await db.execute("SELECT id, r2_key FROM music_tracks;")
+    existing_rows = await cursor.fetchall()
+    existing_keys = {r["r2_key"] for r in existing_rows if r["r2_key"]}
+    existing_ids = {r["id"] for r in existing_rows}
+
+    added = 0
+    for idx, key in enumerate(sorted(keys)):
+        _, ext = os.path.splitext(key.lower())
+        if ext not in AUDIO_EXTS:
+            continue
+        if key in existing_keys:
+            continue
+
+        track_id, artist, title = _parse_track_from_r2_key(key)
+        if track_id in existing_ids:
+            track_id = f"{track_id}_{uuid.uuid4().hex[:4]}"
+
+        stream_url = r2_service.get_public_url(key)
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO music_tracks (id, title, artist, duration, stream_url, r2_key, is_active, sort_order)
+            VALUES (?, ?, ?, 180, ?, ?, 1, ?);
+            """,
+            (track_id, title, artist, stream_url, key, 10 + idx),
+        )
+        existing_keys.add(key)
+        existing_ids.add(track_id)
+        added += 1
+
+    if added > 0:
+        await db.commit()
+    return added
+
 
 @router.get("/playlist", response_model=List[MusicTrackItem])
 async def get_playlist(db: aiosqlite.Connection = Depends(get_db)):
     """
     Get the official racing music playlist with Cloudflare R2 streaming audio URLs.
-    Includes both direct CDN streamUrl and resilient backend proxyUrl.
+    Automatically syncs any newly uploaded tracks from the R2 'music/' folder.
     """
+    await sync_r2_music_tracks(db, force=False)
     cursor = await db.execute(
         """
         SELECT id, title, artist, duration, stream_url, r2_key, is_active
@@ -40,6 +119,13 @@ async def get_playlist(db: aiosqlite.Connection = Depends(get_db)):
         )
         for r in rows
     ]
+
+
+@router.post("/sync", dependencies=[Depends(verify_admin_key)])
+async def force_sync_r2_music(db: aiosqlite.Connection = Depends(get_db)):
+    """Force an immediate re-scan of the Cloudflare R2 'music/' folder (Requires Admin Key)."""
+    added = await sync_r2_music_tracks(db, force=True)
+    return {"success": True, "added": added}
 
 
 @router.get("/stream/{track_id}")

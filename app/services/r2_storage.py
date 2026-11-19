@@ -89,5 +89,31 @@ class CloudflareR2Service:
             logger.error(f"Error reading object from R2 ({key}): {e}")
             return None
 
+    def list_objects(self, prefix: str = "music/") -> list[str]:
+        """
+        List all object keys under the given prefix in Cloudflare R2.
+        """
+        if not self.client:
+            return []
+        keys: list[str] = []
+        continuation_token: Optional[str] = None
+        try:
+            while True:
+                params = {"Bucket": self.bucket, "Prefix": prefix}
+                if continuation_token:
+                    params["ContinuationToken"] = continuation_token
+                resp = self.client.list_objects_v2(**params)
+                for item in resp.get("Contents", []):
+                    key = item.get("Key")
+                    if key:
+                        keys.append(key)
+                if resp.get("IsTruncated"):
+                    continuation_token = resp.get("NextContinuationToken")
+                else:
+                    break
+        except Exception as e:
+            logger.error(f"Error listing objects from R2 (prefix={prefix}): {e}")
+        return keys
+
 
 r2_service = CloudflareR2Service()
